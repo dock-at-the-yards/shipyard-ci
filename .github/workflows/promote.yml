@@ -133,7 +133,39 @@ jobs:
           NUMBER: ${{ steps.pr.outputs.number }}
         run: |
           set -euo pipefail
-          # --auto defers the merge to the moment the required checks go green,
-          # so a promotion can never land ahead of a failing or pending gate.
-          gh pr merge "$NUMBER" --squash --auto
-          echo "::notice::merge queued; lands once required checks pass"
+          # No --auto and no --squash, deliberately. --auto needs the
+          # auto-merge feature, which free private repos do not have, so the
+          # same workflow would fail there. --squash violates the merge-only
+          # rulesets on public repos, and it flattens history so the next
+          # promotion would re-list already-promoted commits. Instead the
+          # gates are awaited explicitly below, then merged with an explicit
+          # merge commit, which preserves ancestry across promotions. Repos
+          # with no gates configured (empty rollup) merge right away.
+          GRACE_END=$(( $(date +%s) + 300 ))
+          for i in $(seq 1 45); do
+            ROLLUP="$(gh pr view "$NUMBER" --json statusCheckRollup --jq '.statusCheckRollup')"
+            N="$(echo "$ROLLUP" | jq 'length')"
+            FAILED="$(echo "$ROLLUP" | jq '[.[] | select(.conclusion == "FAILURE" or .conclusion == "CANCELLED" or .conclusion == "TIMED_OUT" or .conclusion == "ACTION_REQUIRED" or .conclusion == "STARTUP_FAILURE")] | length')"
+            OPEN="$(echo "$ROLLUP" | jq '[.[] | select(.conclusion != "SUCCESS" and .conclusion != "NEUTRAL" and .conclusion != "SKIPPED")] | length')"
+            if [ "$FAILED" -gt 0 ]; then
+              echo "::error::a gate failed on PR #$NUMBER"
+              echo "$ROLLUP" | jq -r '.[] | select(.conclusion == "FAILURE" or .conclusion == "CANCELLED" or .conclusion == "TIMED_OUT" or .conclusion == "ACTION_REQUIRED" or .conclusion == "STARTUP_FAILURE") | "\(.name): \(.conclusion)"'
+              exit 1
+            fi
+            if [ "$N" -gt 0 ] && [ "$OPEN" -eq 0 ]; then
+              echo "all gates green; merging"
+              break
+            fi
+            if [ "$N" -eq 0 ] && [ "$(date +%s)" -ge "$GRACE_END" ]; then
+              echo "::notice::no checks reported after 5 min; merging (no gates configured)"
+              break
+            fi
+            echo "waiting on gates (attempt $i/45)..."
+            sleep 60
+            if [ "$i" -eq 45 ]; then
+              echo "::error::gates still pending after 45 min on PR #$NUMBER"
+              exit 1
+            fi
+          done
+          gh pr merge "$NUMBER" --merge
+          echo "::notice::merged promotion PR #$NUMBER"
