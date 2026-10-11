@@ -55,7 +55,7 @@ spec:
               repo: "{{inputs.parameters.git-repo}}"
               revision: "{{inputs.parameters.git-revision}}"
       container:
-        image: ghcr.io/shivam-jainn/shipyard-cli:latest
+        image: ghcr.io/dock-at-the-yards/shipyard-cli:latest
         command: [sh, -c]
         args:
           - |

@@ -45,10 +45,10 @@ Feature branches are throwaway. Nothing long-lived forks from `main`.
 
 ```bash
 # develop -> staging
-gh workflow run promote.yml --repo shivam-jainn/shipyard-ci -f target=staging
+gh workflow run promote.yml --repo dock-at-the-yards/shipyard-ci -f target=staging
 
 # staging -> main
-gh workflow run promote.yml --repo shivam-jainn/shipyard-ci -f target=production
+gh workflow run promote.yml --repo dock-at-the-yards/shipyard-ci -f target=production
 ```
 
 The workflow refuses to skip a tier, so `develop` cannot reach `main` directly.

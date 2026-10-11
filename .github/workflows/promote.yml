@@ -10,7 +10,7 @@ name: Promote
 # `main`: a consumer who reads `main` should get templates that have been
 # exercised in a pre-production environment first.
 #
-# Run it with:  gh workflow run promote.yml --repo shivam-jainn/shipyard-ci
+# Run it with:  gh workflow run promote.yml --repo dock-at-the-yards/shipyard-ci
 #
 # Runs on ubuntu-latest because it drives the GitHub API through the `gh` CLI,
 # which is not installed on the runner image.

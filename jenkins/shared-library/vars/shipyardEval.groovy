@@ -31,7 +31,7 @@ def call(Map config = [:]) {
                     (apt-get update && apt-get install -y curl ca-certificates)
                 set -- --channel "$CHANNEL" --yes
                 if [ -n "$VERSION" ]; then set -- "$@" --version "$VERSION"; fi
-                curl -fsSL https://raw.githubusercontent.com/shivam-jainn/shipyard-cli/main/install.sh | sh -s -- "$@"
+                curl -fsSL https://raw.githubusercontent.com/dock-at-the-yards/shipyard-cli/main/install.sh | sh -s -- "$@"
                 shipyard version
             '''
         }

@@ -24,7 +24,7 @@ shipyard-agent-eval:
     - apk add --no-cache bash curl ca-certificates
     # The installer targets /usr/local/bin, which is already on PATH in this image.
     - >-
-      curl -fsSL https://raw.githubusercontent.com/shivam-jainn/shipyard-cli/main/install.sh
+      curl -fsSL https://raw.githubusercontent.com/dock-at-the-yards/shipyard-cli/main/install.sh
       | sh -s -- --channel "$SHIPYARD_CHANNEL" ${SHIPYARD_VERSION:+--version "$SHIPYARD_VERSION"} --yes
     - shipyard version
   script:
