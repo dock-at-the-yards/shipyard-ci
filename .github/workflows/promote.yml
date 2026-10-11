@@ -77,8 +77,11 @@ jobs:
         run: |
           set -euo pipefail
           # An empty promotion is not an error worth failing on, but it must not
-          # silently produce a PR either: report it and stop.
-          if git merge-base --is-ancestor "origin/$DEST" "origin/$SOURCE"; then
+          # silently produce a PR either: report it and stop. The test is
+          # whether the source is already an ancestor of the destination;
+          # testing the reverse would skip exactly the fast-forward case the
+          # promotion exists for.
+          if git merge-base --is-ancestor "origin/$SOURCE" "origin/$DEST"; then
             echo "::notice::$DEST already contains everything on $SOURCE"
             echo "promotable=false" >> "$GITHUB_OUTPUT"
           else
