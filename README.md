@@ -5,7 +5,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/shivam-jainn/shipyard-ci/actions"><img src="https://img.shields.io/badge/CI-Argo%20%7C%20GHA%20%7C%20Jenkins-blueviolet.svg" alt="CI Engines"></a>
+  <a href="https://github.com/dock-at-the-yards/shipyard-ci/actions"><img src="https://img.shields.io/badge/CI-Argo%20%7C%20GHA%20%7C%20Jenkins-blueviolet.svg" alt="CI Engines"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-Shipyard%20(source--available)-blue.svg" alt="License: Shipyard source-available"></a>
 </p>
 
@@ -40,7 +40,7 @@ more replace directives. It must not contain directives that would cause
 it to be interpreted differently than if it were the main module.
 ```
 
-So every integration here installs the CLI from its **published release artifacts** via [`shipyard-cli`](https://github.com/shivam-jainn/shipyard-cli)'s `install.sh`, which verifies SHA256 checksums. There is no `go install` path, by design.
+So every integration here installs the CLI from its **published release artifacts** via [`shipyard-cli`](https://github.com/dock-at-the-yards/shipyard-cli)'s `install.sh`, which verifies SHA256 checksums. There is no `go install` path, by design.
 
 ### Release channels
 
@@ -55,7 +55,7 @@ Every integration accepts a channel so a pipeline can track a moving target or a
 **Pin an exact version in production.** Track the channel while you integrate, then pin once you are satisfied:
 
 ```yaml
-uses: shivam-jainn/shipyard-ci@v1
+uses: dock-at-the-yards/shipyard-ci@v1
 with:
   path: 'evalset/'
   channel: 'stable'
@@ -68,7 +68,7 @@ with:
 | GitLab CI | `SHIPYARD_CHANNEL` variable | `SHIPYARD_VERSION` variable |
 | Jenkins | `CHANNEL` parameter | `VERSION` parameter |
 | Groovy library | `channel:` config | `version:` config |
-| Argo | `ghcr.io/shivam-jainn/shipyard-cli:<tag>` | pin the digest |
+| Argo | `ghcr.io/dock-at-the-yards/shipyard-cli:<tag>` | pin the digest |
 
 To see exactly what a pipeline ran, `shipyard version` reports the version, the CLI commit, the engine commit it was built against, and the channel.
 
@@ -96,7 +96,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Run Shipyard Gate
-        uses: shivam-jainn/shipyard-ci@v1
+        uses: dock-at-the-yards/shipyard-ci@v1
         with:
           path: 'evalset/'
           post-comment: 'true'

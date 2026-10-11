@@ -10,7 +10,7 @@ name: Promote
 # `main`: a consumer who reads `main` should get templates that have been
 # exercised in a pre-production environment first.
 #
-# Run it with:  gh workflow run promote.yml --repo shivam-jainn/shipyard-ci
+# Run it with:  gh workflow run promote.yml --repo dock-at-the-yards/shipyard-ci
 #
 # Runs on ubuntu-latest because it drives the GitHub API through the `gh` CLI,
 # which is not installed on the runner image.
@@ -34,6 +34,11 @@ on:
 permissions:
   contents: write
   pull-requests: write
+  # The merge step polls statusCheckRollup for the gates; without these
+  # the query fails with "Resource not accessible by integration"
+  # (the rollup nests checkSuite.workflowRun, which needs actions:read).
+  checks: read
+  actions: read
 
 concurrency:
   group: ci-promote-${{ inputs.target }}
@@ -77,8 +82,11 @@ jobs:
         run: |
           set -euo pipefail
           # An empty promotion is not an error worth failing on, but it must not
-          # silently produce a PR either: report it and stop.
-          if git merge-base --is-ancestor "origin/$DEST" "origin/$SOURCE"; then
+          # silently produce a PR either: report it and stop. The test is
+          # whether the source is already an ancestor of the destination;
+          # testing the reverse would skip exactly the fast-forward case the
+          # promotion exists for.
+          if git merge-base --is-ancestor "origin/$SOURCE" "origin/$DEST"; then
             echo "::notice::$DEST already contains everything on $SOURCE"
             echo "promotable=false" >> "$GITHUB_OUTPUT"
           else
@@ -133,7 +141,39 @@ jobs:
           NUMBER: ${{ steps.pr.outputs.number }}
         run: |
           set -euo pipefail
-          # --auto defers the merge to the moment the required checks go green,
-          # so a promotion can never land ahead of a failing or pending gate.
-          gh pr merge "$NUMBER" --squash --auto
-          echo "::notice::merge queued; lands once required checks pass"
+          # No --auto and no --squash, deliberately. --auto needs the
+          # auto-merge feature, which free private repos do not have, so the
+          # same workflow would fail there. --squash violates the merge-only
+          # rulesets on public repos, and it flattens history so the next
+          # promotion would re-list already-promoted commits. Instead the
+          # gates are awaited explicitly below, then merged with an explicit
+          # merge commit, which preserves ancestry across promotions. Repos
+          # with no gates configured (empty rollup) merge right away.
+          GRACE_END=$(( $(date +%s) + 300 ))
+          for i in $(seq 1 45); do
+            ROLLUP="$(gh pr view "$NUMBER" --json statusCheckRollup --jq '.statusCheckRollup')"
+            N="$(echo "$ROLLUP" | jq 'length')"
+            FAILED="$(echo "$ROLLUP" | jq '[.[] | select(.conclusion == "FAILURE" or .conclusion == "CANCELLED" or .conclusion == "TIMED_OUT" or .conclusion == "ACTION_REQUIRED" or .conclusion == "STARTUP_FAILURE")] | length')"
+            OPEN="$(echo "$ROLLUP" | jq '[.[] | select(.conclusion != "SUCCESS" and .conclusion != "NEUTRAL" and .conclusion != "SKIPPED")] | length')"
+            if [ "$FAILED" -gt 0 ]; then
+              echo "::error::a gate failed on PR #$NUMBER"
+              echo "$ROLLUP" | jq -r '.[] | select(.conclusion == "FAILURE" or .conclusion == "CANCELLED" or .conclusion == "TIMED_OUT" or .conclusion == "ACTION_REQUIRED" or .conclusion == "STARTUP_FAILURE") | "\(.name): \(.conclusion)"'
+              exit 1
+            fi
+            if [ "$N" -gt 0 ] && [ "$OPEN" -eq 0 ]; then
+              echo "all gates green; merging"
+              break
+            fi
+            if [ "$N" -eq 0 ] && [ "$(date +%s)" -ge "$GRACE_END" ]; then
+              echo "::notice::no checks reported after 5 min; merging (no gates configured)"
+              break
+            fi
+            echo "waiting on gates (attempt $i/45)..."
+            sleep 60
+            if [ "$i" -eq 45 ]; then
+              echo "::error::gates still pending after 45 min on PR #$NUMBER"
+              exit 1
+            fi
+          done
+          gh pr merge "$NUMBER" --merge
+          echo "::notice::merged promotion PR #$NUMBER"

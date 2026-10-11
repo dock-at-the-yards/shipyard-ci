@@ -70,7 +70,7 @@ runs:
         else
           args="--channel $CHANNEL"
           if [ -n "$VERSION" ]; then args="$args --version $VERSION"; fi
-          curl -fsSL https://raw.githubusercontent.com/shivam-jainn/shipyard-cli/main/install.sh \
+          curl -fsSL https://raw.githubusercontent.com/dock-at-the-yards/shipyard-cli/main/install.sh \
             | sh -s -- $args --yes --install-dir /usr/local/bin
         fi
         shipyard version
