@@ -34,9 +34,11 @@ on:
 permissions:
   contents: write
   pull-requests: write
-  # The merge step polls statusCheckRollup for the gates; without this the
-  # query fails with "Resource not accessible by integration".
+  # The merge step polls statusCheckRollup for the gates; without these
+  # the query fails with "Resource not accessible by integration"
+  # (the rollup nests checkSuite.workflowRun, which needs actions:read).
   checks: read
+  actions: read
 
 concurrency:
   group: ci-promote-${{ inputs.target }}
