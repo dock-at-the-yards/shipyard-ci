@@ -1,0 +1,9 @@
+# Python bytecode caches. scripts/report_generator.py is run locally and the
+# cache it leaves behind is never something to commit.
+__pycache__/
+*.py[cod]
+
+# Local evaluation output
+rollouts/
+shipyard-report.md
+.env

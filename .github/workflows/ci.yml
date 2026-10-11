@@ -1,0 +1,139 @@
+name: CI
+
+# This repository is a set of integration templates rather than an application:
+# a composite action, Argo and GitLab CI configs, a Jenkinsfile with a shared
+# library, and a Python report generator. There is no build and no test suite
+# in the usual sense, so CI validates that every template is still well-formed
+# and internally consistent.
+#
+# Runs on the Raspberry Pi (self-hosted, linux, ARM64, pi). Nothing here needs
+# QEMU or a hosted runner, so this repository has no hosted-runner jobs at all.
+
+on:
+  push:
+    branches: [ main, staging, develop ]
+  pull_request:
+    branches: [ main, staging, develop ]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: Validate templates
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # A YAML template with a syntax error is worse than no template: it looks
+      # correct in review and fails only when someone adopts it.
+      - name: Parse every YAML file
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import glob, sys, yaml
+
+          files = sorted(
+              glob.glob(".github/workflows/*.yml")
+              + glob.glob("argo/*.yaml")
+              + glob.glob("gitlab/*.yml")
+              + glob.glob("examples/**/*.yml", recursive=True)
+          )
+          if not files:
+              sys.exit("no YAML files found; the glob is probably wrong")
+
+          bad = 0
+          for f in files:
+              try:
+                  yaml.safe_load(open(f))
+                  print(f"  ok    {f}")
+              except Exception as exc:
+                  bad += 1
+                  print(f"  FAIL  {f}: {exc}")
+          if bad:
+              sys.exit(f"{bad} file(s) failed to parse")
+          print(f"\n{len(files)} YAML files parsed")
+          PY
+
+      # The composite action is consumed through `uses:` rather than read, so
+      # GitHub never surfaces a mistake in it until a caller fails.
+      - name: Validate the composite action
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import sys, yaml
+
+          doc = yaml.safe_load(open("action.yml"))
+          problems = []
+
+          for key in ("name", "description", "runs"):
+              if key not in doc:
+                  problems.append(f"missing required key: {key}")
+
+          # A composite action that declares no `using` is silently treated as
+          # invalid at call time, which is an unhelpful failure for consumers.
+          using = (doc.get("runs") or {}).get("using")
+          if using and using != "composite":
+              print(f"  note  runs.using is {using!r}, expected 'composite'")
+
+          inputs = doc.get("inputs") or {}
+          print(f"  {len(inputs)} declared inputs")
+          for name, spec in inputs.items():
+              desc = (spec or {}).get("description", "")
+              # An input with no description is invisible to anyone reading
+              # `uses:` in a workflow file.
+              if not desc:
+                  problems.append(f"input {name!r} has no description")
+              print(f"    {name}: {'required' if (spec or {}).get('required') else 'optional'}")
+
+          steps = (doc.get("runs") or {}).get("steps") or []
+          if not steps:
+              problems.append("composite action declares no steps")
+          print(f"  {len(steps)} steps")
+
+          if problems:
+              for p in problems:
+                  print(f"  FAIL  {p}")
+              sys.exit(1)
+          print("\naction.yml OK")
+          PY
+
+      - name: Byte-compile the report generator
+        run: |
+          set -euo pipefail
+          # Catches syntax errors and bad imports without needing the rollouts
+          # directory, which only exists in a real evaluation run.
+          python3 -m py_compile scripts/report_generator.py
+          echo "  report_generator.py compiles"
+
+      # A __pycache__ committed by accident is noise that also goes stale.
+      - name: Check nothing generated is committed
+        run: |
+          set -euo pipefail
+          if git ls-files --error-unmatch 'scripts/__pycache__' >/dev/null 2>&1; then
+            echo "::error::scripts/__pycache__ is tracked; add it to .gitignore and git rm --cached it"
+            exit 1
+          fi
+          if [ -f .gitignore ] && grep -q '__pycache__' .gitignore; then
+            echo "  .gitignore already covers __pycache__"
+          else
+            echo "::error::.gitignore does not cover __pycache__"
+            exit 1
+          fi
+
+      - name: Shell scripts parse
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          found=0
+          for f in $(git ls-files '*.sh'); do
+            bash -n "$f"
+            echo "  ok    $f"
+            found=$((found + 1))
+          done
+          echo "$found shell scripts parsed"

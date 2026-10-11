@@ -1,0 +1,102 @@
+apiVersion: argoproj.io/v1alpha1
+kind: WorkflowTemplate
+metadata:
+  name: shipyard-eval-runner
+  annotations:
+    workflows.argoproj.io/description: "Run parallelized autonomous AI agent evaluations with Shipyard in Kubernetes"
+    workflows.argoproj.io/maintainer: "Shipyard Team"
+spec:
+  entrypoint: run-eval-suite
+  arguments:
+    parameters:
+      - name: eval-path
+        value: "evalset/"
+      - name: agent-name
+        value: "claude-code"
+      - name: git-repo
+        value: "https://github.com/my-org/my-agent-repo.git"
+      - name: git-revision
+        value: "main"
+
+  templates:
+    - name: run-eval-suite
+      inputs:
+        parameters:
+          - name: eval-path
+          - name: agent-name
+          - name: git-repo
+          - name: git-revision
+      dag:
+        tasks:
+          - name: evaluate-agent
+            template: run-shipyard-pod
+            arguments:
+              parameters:
+                - name: eval-path
+                  value: "{{inputs.parameters.eval-path}}"
+                - name: agent-name
+                  value: "{{inputs.parameters.agent-name}}"
+                - name: git-repo
+                  value: "{{inputs.parameters.git-repo}}"
+                - name: git-revision
+                  value: "{{inputs.parameters.git-revision}}"
+
+    - name: run-shipyard-pod
+      inputs:
+        parameters:
+          - name: eval-path
+          - name: agent-name
+          - name: git-repo
+          - name: git-revision
+        artifacts:
+          - name: source-code
+            path: /src
+            git:
+              repo: "{{inputs.parameters.git-repo}}"
+              revision: "{{inputs.parameters.git-revision}}"
+      container:
+        image: ghcr.io/dock-at-the-yards/shipyard-cli:latest
+        command: [sh, -c]
+        args:
+          - |
+            cd /src
+            echo "Starting Shipyard Evaluation Runner..."
+            shipyard run "{{inputs.parameters.eval-path}}" \
+              --agent "{{inputs.parameters.agent-name }}"
+        resources:
+          requests:
+            memory: "4Gi"
+            cpu: "2000m"
+          limits:
+            memory: "8Gi"
+            cpu: "4000m"
+        env:
+          - name: OPENAI_API_KEY
+            valueFrom:
+              secretKeyRef:
+                name: shipyard-secrets
+                key: openai-api-key
+                optional: true
+          - name: ANTHROPIC_API_KEY
+            valueFrom:
+              secretKeyRef:
+                name: shipyard-secrets
+                key: anthropic-api-key
+                optional: true
+      outputs:
+        artifacts:
+          - name: atif-rollouts
+            path: /src/{{inputs.parameters.eval-path}}/rollouts
+            archive:
+              tar:
+                compressionLevel: 9
+            s3:
+              endpoint: s3.amazonaws.com
+              bucket: my-shipyard-eval-bucket
+              key: "atif-rollouts/{{workflow.name}}/{{pod.name}}.tar.gz"
+              accessKeySecret:
+                name: shipyard-s3-credentials
+                key: accessKey
+              secretKeySecret:
+                name: shipyard-s3-credentials
+                key: secretKey

@@ -1,0 +1,21 @@
+apiVersion: argoproj.io/v1alpha1
+kind: CronWorkflow
+metadata:
+  name: nightly-agent-benchmarks
+spec:
+  schedule: "0 2 * * *" # Every day at 02:00 UTC
+  concurrencyPolicy: "Replace"
+  startingDeadlineSeconds: 300
+  workflowSpec:
+    workflowTemplateRef:
+      name: shipyard-eval-runner
+    arguments:
+      parameters:
+        - name: eval-path
+          value: "evalset/full-regression-suite"
+        - name: agent-name
+          value: "claude-code"
+        - name: git-repo
+          value: "https://github.com/my-org/my-agent-repo.git"
+        - name: git-revision
+          value: "main"

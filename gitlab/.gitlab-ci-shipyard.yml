@@ -1,0 +1,38 @@
+stages:
+  - test
+
+# shipyard-core is a private repository, so `go install` cannot be used to
+# provision the CLI: the Go toolchain rejects a module whose go.mod carries a
+# filesystem replace. The CLI is installed from its published release
+# artifacts instead, resolved by channel.
+#
+# Override the channel or pin a version per project:
+#   SHIPYARD_CHANNEL: test
+#   SHIPYARD_VERSION: v0.1.0
+shipyard-agent-eval:
+  stage: test
+  image: alpine:3.20
+  services:
+    - docker:dind
+  variables:
+    DOCKER_HOST: tcp://docker:2375
+    DOCKER_TLS_CERTDIR: ""
+    SHIPYARD_CHANNEL: stable
+    EVAL_PATH: "evalset/"
+    AGENT: "claude-code"
+  before_script:
+    - apk add --no-cache bash curl ca-certificates
+    # The installer targets /usr/local/bin, which is already on PATH in this image.
+    - >-
+      curl -fsSL https://raw.githubusercontent.com/dock-at-the-yards/shipyard-cli/main/install.sh
+      | sh -s -- --channel "$SHIPYARD_CHANNEL" ${SHIPYARD_VERSION:+--version "$SHIPYARD_VERSION"} --yes
+    - shipyard version
+  script:
+    - shipyard run "$EVAL_PATH" --agent "$AGENT"
+  artifacts:
+    when: always
+    # The engine writes rollouts to <eval-path>/rollouts/<run-id>/. There is no
+    # .shipyard directory anywhere in the codebase.
+    paths:
+      - $EVAL_PATH/rollouts/
+    expire_in: 14 days

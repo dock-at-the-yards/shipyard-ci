@@ -1,0 +1,68 @@
+pipeline {
+    // shipyard-core is a private repository, so `go install` cannot provision
+    // the CLI: the Go toolchain rejects a module whose go.mod carries a
+    // filesystem replace. The CLI is installed from its published release
+    // artifacts instead, resolved by channel. That also means this image no
+    // longer needs a Go toolchain.
+    agent {
+        docker {
+            image 'alpine:3.20'
+            args '-u root -v /var/run/docker.sock:/var/run/docker.sock'
+        }
+    }
+
+    parameters {
+        string(name: 'EVAL_PATH', defaultValue: 'evalset/', description: 'Evaluation directory or suite')
+        string(name: 'AGENT', defaultValue: 'claude-code', description: 'Agent driver override')
+        choice(name: 'MODEL', choices: ['gpt-4o', 'claude-3-5-sonnet-20241022', 'gemini-1.5-pro'], description: 'Model override')
+        choice(name: 'CHANNEL', choices: ['stable', 'test', 'dev'], description: 'Shipyard release channel to install')
+        string(name: 'VERSION', defaultValue: '', description: 'Pin an exact version, e.g. v0.1.0. Empty tracks the channel.')
+    }
+
+    environment {
+        OPENAI_API_KEY = credentials('openai-api-key')
+        ANTHROPIC_API_KEY = credentials('anthropic-api-key')
+    }
+
+    stages {
+        stage('Setup Shipyard') {
+            steps {
+                sh '''
+                    set -eu
+                    apk add --no-cache bash curl ca-certificates
+                    echo "Installing Shipyard CLI (channel=${CHANNEL}, version=${VERSION:-channel head})..."
+                    set -- --channel "${CHANNEL}" --yes
+                    if [ -n "${VERSION}" ]; then set -- "$@" --version "${VERSION}"; fi
+                    curl -fsSL https://raw.githubusercontent.com/dock-at-the-yards/shipyard-cli/main/install.sh | sh -s -- "$@"
+                    shipyard version
+                '''
+            }
+        }
+
+        stage('Execute Agent Evals') {
+            steps {
+                sh '''
+                    set -eu
+                    echo "Running Shipyard CI Gate..."
+                    shipyard run "${EVAL_PATH}" \
+                        --agent "${AGENT}" \
+                        --model "${MODEL}" \
+                        --run-id "jenkins-build-${BUILD_NUMBER}"
+                '''
+            }
+        }
+    }
+
+    post {
+        always {
+            // The engine writes rollouts to <eval-path>/rollouts/<run-id>/.
+            archiveArtifacts artifacts: "${EVAL_PATH}rollouts/**", fingerprint: true, allowEmptyArchive: true
+        }
+        failure {
+            echo "Shipyard Agent regression gate failed! Check archived ATIF rollouts."
+        }
+        success {
+            echo "All agent benchmarks passed with target scores!"
+        }
+    }
+}

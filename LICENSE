@@ -1,0 +1,101 @@
+SHIPYARD SOURCE-AVAILABLE LICENSE
+
+Copyright (c) 2026 Shivam Jain. All rights reserved.
+
+NOTICE: This is a source-available license, not an open source license. The
+Software is publicly readable but is NOT licensed under the Apache License,
+MIT License, BSD licenses, the GNU General Public License, or any other OSI
+approved license. You do not receive the rights those licenses grant.
+
+1. OWNERSHIP
+
+   The Software, including all source code, object code, binaries, build
+   scripts, configuration files, documentation, and design, is and remains
+   the sole and exclusive property of the Licensor. All rights not
+   expressly granted in this Agreement are reserved.
+
+2. WHAT YOU MAY DO
+
+   You may, for any purpose, including commercial purposes and internal use
+   at a company of any size:
+
+     a. Read, study, and inspect the source code.
+
+     b. Use the Software, unmodified, in your own products, services, and
+        internal tooling, including commercially.
+
+     c. Run the Software on your own infrastructure, including in CI/CD
+        pipelines, for evaluation, testing, and quality gates.
+
+     d. Contribute changes back to the project via pull request.
+
+   Commercial use of the unmodified Software is expressly permitted. Nothing
+   in this Agreement requires you to disclose your business, your revenue,
+   or your customers.
+
+3. WHAT YOU MAY NOT DO
+
+   Without the Licensor's prior written permission, you may not:
+
+     a. Host, operate, or offer the Software itself as a hosted, managed, or
+        SaaS product, whether modified or unmodified, whether paid or free.
+
+     b. Sell, license, sublicense, or rent the Software as a standalone
+        product or as the primary value of a product offering.
+
+     c. Publish a fork, mirror, or derivative work of the Software to any
+        public repository, package registry, or code hosting service.
+
+     d. Distribute the Software, in original or modified form, other than as
+        described in section 2.
+
+   A fork or derivative intended only for internal use, and never hosted for
+   third parties, does not require permission.
+
+4. TRADEMARKS
+
+   "Shipyard" and the anchor logo are trademarks of the Licensor. This
+   Agreement grants no trademark rights. Do not use them to describe a
+   product that is not the Software, or in a way that suggests endorsement.
+
+5. CONTRIBUTION
+
+   If you contribute changes, you grant the Licensor a perpetual,
+   irrevocable, worldwide, royalty-free, sublicensable license to use,
+   modify, and distribute those contributions as part of the Software. You
+   retain copyright in your contributions. Contributions are provided
+   "as is", without warranty of any kind.
+
+6. NO WARRANTY
+
+   THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
+   OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+   MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, TITLE, AND
+   NONINFRINGEMENT.
+
+7. LIMITATION OF LIABILITY
+
+   TO THE MAXIMUM EXTENT PERMITTED BY APPLICABLE LAW, IN NO EVENT SHALL THE
+   LICENSOR BE LIABLE FOR ANY CLAIM, DAMAGES, OR OTHER LIABILITY, WHETHER
+   IN AN ACTION OF CONTRACT, TORT, OR OTHERWISE, ARISING FROM, OUT OF, OR
+   IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+   SOFTWARE.
+
+8. TERMINATION
+
+   This Agreement terminates automatically if you breach it. On
+   termination, you must stop using and distributing the Software, except
+   that internal use under section 2(c) may continue for historical
+   pipeline records.
+
+9. GOVERNING LAW
+
+   This Agreement is governed by the laws applicable at the Licensor's
+   principal place of business, without regard to conflict of law
+   provisions. Courts there have exclusive jurisdiction.
+
+10. ENTIRE AGREEMENT
+
+    This Agreement is the entire agreement between the parties regarding
+    the Software and supersedes all prior agreements. If any provision is
+    unenforceable, the remainder stays in effect.
