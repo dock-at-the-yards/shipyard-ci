@@ -11,7 +11,7 @@ inputs:
     required: false
     default: 'stable'
   version:
-    description: 'Pin an exact version, e.g. v0.1.0. Leave empty to track the channel.'
+    description: 'Pin an exact version, e.g. v0.0.2. Leave empty to track the channel.'
     required: false
     default: ''
   path:
@@ -30,8 +30,28 @@ inputs:
     description: 'Model override (e.g. gpt-4o, claude-3-5-sonnet-20241022)'
     required: false
     default: ''
+  repeat:
+    description: 'Repeats per eval (k). k>=3 enables the 95% t-interval noise floor in the delta gate; 3 is recommended.'
+    required: false
+    default: '1'
+  baseline:
+    description: 'Baseline JSON used by the delta gate, relative to `path` (default: baselines/main.json). Compare is skipped with a notice when no baseline file exists.'
+    required: false
+    default: 'baselines/main.json'
+  baseline-artifact:
+    description: 'Name of an uploaded artifact containing a baseline JSON, downloaded when no committed baseline file exists (baseline-from-artifact fallback).'
+    required: false
+    default: ''
+  policy:
+    description: 'Path to a gate policy TOML passed to `shipyard compare --policy` (default: the [gate] table in the target manifest).'
+    required: false
+    default: ''
+  junit-file:
+    description: 'Workspace-root path the JUnit XML is copied to for upload and test-pane rendering (default: shipyard-junit.xml).'
+    required: false
+    default: 'shipyard-junit.xml'
   post-comment:
-    description: 'Automatically post evaluation summary report as a PR comment'
+    description: 'Automatically post the evaluation report as a PR comment; reruns update the same sticky comment'
     required: false
     default: 'true'
   github-token:
@@ -49,6 +69,15 @@ outputs:
   summary-markdown:
     description: 'Markdown summary of eval scores and pass/fail results'
     value: ${{ steps.report.outputs.summary_md }}
+  compare-exit-code:
+    description: 'Shipyard compare exit code: 0 gate passed, 1 blocked, 2 usage error (empty when compare was skipped)'
+    value: ${{ steps.compare.outputs.compare_exit_code }}
+  compare-file:
+    description: 'Path to the JSON delta report written by `shipyard compare` (empty when compare was skipped)'
+    value: ${{ steps.compare.outputs.compare_file }}
+  junit-file:
+    description: 'Workspace-root path of the JUnit XML report (empty when the run produced none)'
+    value: ${{ steps.report.outputs.junit_file }}
 
 runs:
   using: 'composite'
@@ -75,57 +104,411 @@ runs:
         fi
         shipyard version
 
+    - name: Resolve baseline path
+      id: baseline
+      shell: bash
+      env:
+        BASELINE_INPUT: ${{ inputs.baseline }}
+        TARGET_PATH: ${{ inputs.path }}
+      run: |
+        set -euo pipefail
+        target="${TARGET_PATH%/}"
+        [ -n "$target" ] || target="."
+        input="${BASELINE_INPUT:-baselines/main.json}"
+        case "$input" in
+          /*)
+            resolved="$input"
+            ;;
+          *)
+            # The CLI convention is <target>/baselines/<name>.json, so a
+            # target-relative file wins; an explicit workspace-root file is
+            # still honored when no target-relative one exists.
+            if [ -f "$target/$input" ]; then
+              resolved="$target/$input"
+            elif [ -f "$input" ]; then
+              resolved="$input"
+            else
+              resolved="$target/$input"
+            fi
+            ;;
+        esac
+        echo "path=$resolved" >> "$GITHUB_OUTPUT"
+        if [ -f "$resolved" ]; then
+          echo "present=true" >> "$GITHUB_OUTPUT"
+          echo "baseline found: $resolved"
+        else
+          echo "present=false" >> "$GITHUB_OUTPUT"
+          echo "no committed baseline at $resolved; the delta gate will be skipped unless baseline-artifact is set"
+        fi
+
+    - name: Download baseline artifact
+      id: baseline-artifact
+      # The released fallback: repos that cannot commit a baseline fetch one
+      # from a previous run's uploaded artifact instead.
+      if: inputs.baseline-artifact != '' && steps.baseline.outputs.present != 'true'
+      uses: actions/download-artifact@v4
+      with:
+        name: ${{ inputs.baseline-artifact }}
+        path: .shipyard-baseline-artifact
+
+    - name: Install baseline from artifact
+      id: baseline-use
+      if: steps.baseline-artifact.outcome == 'success'
+      shell: bash
+      env:
+        BASELINE_PATH: ${{ steps.baseline.outputs.path }}
+      run: |
+        set -euo pipefail
+        if [ -f "$BASELINE_PATH" ]; then
+          echo "baseline already present at $BASELINE_PATH"
+          exit 0
+        fi
+        # Artifact download preserves the uploaded paths relative to their
+        # common ancestor, so find the JSON payload wherever it landed.
+        src="$(find .shipyard-baseline-artifact -type f -name '*.json' | head -n1 || true)"
+        if [ -z "$src" ]; then
+          echo "::warning::baseline artifact contained no JSON file; the delta gate will be skipped"
+          exit 0
+        fi
+        mkdir -p "$(dirname "$BASELINE_PATH")"
+        cp "$src" "$BASELINE_PATH"
+        echo "baseline restored from artifact: $src -> $BASELINE_PATH"
+
     - name: Execute Shipyard Evaluation
       id: run-eval
       shell: bash
+      env:
+        EVAL_PATH: ${{ inputs.path }}
+        REPEAT: ${{ inputs.repeat }}
+        AGENT: ${{ inputs.agent }}
+        PROVIDER: ${{ inputs.provider }}
+        MODEL: ${{ inputs.model }}
       run: |
+        set -euo pipefail
+        case "$REPEAT" in
+          ''|0|*[!0-9]*)
+            echo "::error::repeat must be a positive integer, got '$REPEAT'"
+            exit 2
+            ;;
+        esac
         EXTRA_FLAGS=""
-        if [ -n "${{ inputs.agent }}" ]; then
-          EXTRA_FLAGS="$EXTRA_FLAGS --agent ${{ inputs.agent }}"
+        if [ -n "$AGENT" ]; then
+          EXTRA_FLAGS="$EXTRA_FLAGS --agent $AGENT"
         fi
-        if [ -n "${{ inputs.provider }}" ]; then
-          EXTRA_FLAGS="$EXTRA_FLAGS --provider ${{ inputs.provider }}"
+        if [ -n "$PROVIDER" ]; then
+          EXTRA_FLAGS="$EXTRA_FLAGS --provider $PROVIDER"
         fi
-        if [ -n "${{ inputs.model }}" ]; then
-          EXTRA_FLAGS="$EXTRA_FLAGS --model ${{ inputs.model }}"
+        if [ -n "$MODEL" ]; then
+          EXTRA_FLAGS="$EXTRA_FLAGS --model $MODEL"
         fi
-        ROLLOUT_ID="pr-${{ github.event.pull_request.number || github.run_id }}"
-        echo "rollout_dir=${{ inputs.path }}/rollouts/$ROLLOUT_ID" >> "$GITHUB_OUTPUT"
+        RUN_ID="pr-${{ github.event.pull_request.number || github.run_id }}"
+        echo "run_id=$RUN_ID" >> "$GITHUB_OUTPUT"
+        echo "rollout_dir=${EVAL_PATH%/}/rollouts/$RUN_ID" >> "$GITHUB_OUTPUT"
 
         set +e
-        shipyard run "${{ inputs.path }}" --run-id "$ROLLOUT_ID" $EXTRA_FLAGS
+        # shellcheck disable=SC2086
+        shipyard run "$EVAL_PATH" \
+          --run-id "$RUN_ID" \
+          --repeat "$REPEAT" \
+          --report markdown,json,junit \
+          $EXTRA_FLAGS
         EXIT_CODE=$?
-        echo "exit_code=$EXIT_CODE" >> "$GITHUB_OUTPUT"
         set -e
-        exit $EXIT_CODE
+        echo "exit_code=$EXIT_CODE" >> "$GITHUB_OUTPUT"
+        exit "$EXIT_CODE"
 
-    - name: Generate PR Markdown Report
+    - name: Compare against baseline (delta gate)
+      id: compare
+      if: always() && steps.run-eval.outputs.exit_code != ''
+      shell: bash
+      env:
+        EVAL_PATH: ${{ inputs.path }}
+        RUN_ID: ${{ steps.run-eval.outputs.run_id }}
+        BASELINE: ${{ steps.baseline.outputs.path }}
+        POLICY: ${{ inputs.policy }}
+      run: |
+        set -euo pipefail
+        if [ ! -f "$BASELINE" ]; then
+          echo "::notice::no baseline at $BASELINE; skipping the delta gate (commit one with 'shipyard baseline save --name main' or set baseline-artifact)"
+          echo "compare_exit_code=0" >> "$GITHUB_OUTPUT"
+          echo "compare_file=" >> "$GITHUB_OUTPUT"
+          echo "skipped=true" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+        ARGS=(--baseline "$BASELINE" --run-id "$RUN_ID" --json)
+        if [ -n "$POLICY" ]; then
+          ARGS+=(--policy "$POLICY")
+        fi
+        set +e
+        shipyard compare "$EVAL_PATH" "${ARGS[@]}" > shipyard-compare.json 2> shipyard-compare.err
+        COMPARE_EXIT=$?
+        set -e
+        if [ -s shipyard-compare.err ]; then
+          echo "--- shipyard compare stderr ---"
+          cat shipyard-compare.err
+          echo "---"
+        fi
+        echo "compare_exit_code=$COMPARE_EXIT" >> "$GITHUB_OUTPUT"
+        echo "skipped=false" >> "$GITHUB_OUTPUT"
+        if [ "$COMPARE_EXIT" -eq 0 ] || [ "$COMPARE_EXIT" -eq 1 ]; then
+          # Exit 1 is the expected "gate blocked" outcome; the final step turns
+          # it into a job failure after the reports and annotations are out.
+          echo "compare_file=shipyard-compare.json" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+        if [ "$COMPARE_EXIT" -eq 2 ]; then
+          msg="$(tr '\n' ' ' < shipyard-compare.err 2>/dev/null || true)"
+          echo "::error::shipyard compare usage error (exit 2): ${msg:-see the step log}"
+          exit 2
+        fi
+        echo "::error::shipyard compare failed with unexpected exit code $COMPARE_EXIT"
+        exit "$COMPARE_EXIT"
+
+    - name: Annotate regressions and flakes
+      id: annotate
+      if: always() && steps.compare.outputs.compare_file != ''
+      shell: bash
+      env:
+        COMPARE_FILE: ${{ steps.compare.outputs.compare_file }}
+        EVAL_PATH: ${{ inputs.path }}
+      run: |
+        set -euo pipefail
+        # Annotations point at the eval directory so review UIs surface them on
+        # the offending eval. Improved/same evals are not annotated.
+        python3 - "$COMPARE_FILE" "${EVAL_PATH%/}" <<'PY'
+        import json
+        import sys
+
+        report_path, target = sys.argv[1], sys.argv[2]
+
+        def clean(text):
+            return " ".join(str(text or "").split())
+
+        def annotate(level, name, status, reason):
+            title = f"Shipyard: {name} {status}"
+            print(
+                f"::{level} file={target}/{name},line=1,title={title}::"
+                f"{clean(reason) or status}"
+            )
+
+        try:
+            with open(report_path, encoding="utf-8") as fh:
+                report = json.load(fh)
+        except Exception as exc:  # never fail the job over annotation cosmetics
+            print(f"::warning::could not parse {report_path}: {exc}")
+            sys.exit(0)
+
+        annotated = set()
+        for ev in report.get("evals") or []:
+            name = ev.get("name") or "unknown"
+            status = str(ev.get("status") or "unknown")
+            if status == "flaked":
+                annotate("warning", name, status, ev.get("reason"))
+                annotated.add(name)
+            elif ev.get("blocks"):
+                annotate("error", name, status, ev.get("reason"))
+                annotated.add(name)
+
+        # Suite-definition refusals block without producing eval rows; name the
+        # changed evals and surface the refusal itself.
+        if report.get("refusal"):
+            note = clean(report["refusal"])
+            if len(note) > 900:
+                note = note[:900] + "..."
+            for name in report.get("blocked_evals") or []:
+                if name in annotated or name == "(suite)":
+                    continue
+                print(
+                    f"::error file={target}/{name},line=1,"
+                    f"title=Shipyard: {name} suite mismatch::"
+                    "eval definition changed; see the suite mismatch annotation"
+                )
+            print(f"::error title=Shipyard suite mismatch::suite digest changed; {note}")
+        PY
+
+    - name: Generate reports and job summary
       id: report
       if: always()
       shell: bash
+      env:
+        ACTION_PATH: ${{ github.action_path }}
+        EVAL_PATH: ${{ inputs.path }}
+        RUN_ID: ${{ steps.run-eval.outputs.run_id }}
+        BASELINE: ${{ steps.baseline.outputs.path }}
+        JUNIT_FILE: ${{ inputs.junit-file }}
       run: |
-        python3 ${{ github.action_path }}/scripts/report_generator.py \
-          --rollout-dir "${{ inputs.path }}/rollouts" \
-          --output "shipyard-report.md" || true
-        if [ -f "shipyard-report.md" ]; then
-          echo "summary_md<<EOF" >> "$GITHUB_OUTPUT"
-          cat shipyard-report.md >> "$GITHUB_OUTPUT"
-          echo "EOF" >> "$GITHUB_OUTPUT"
+        set -uo pipefail
+        target="${EVAL_PATH%/}"
+        [ -n "$target" ] || target="."
+        REPORT_MD="$target/shipyard-report.md"
+        RESULTS="$target/rollouts/${RUN_ID:-unknown}/results.json"
+        DELTA_MD="shipyard-delta.md"
+        SUMMARY_MD="shipyard-summary.md"
+        : > "$SUMMARY_MD"
+
+        # 1. The run markdown report: `run --report markdown,json,junit` already
+        #    wrote it. Re-render only when it is missing (older run, early
+        #    failure), via the report generator, then via the CLI itself so a
+        #    run and its report can still be produced by different steps.
+        if [ ! -s "$REPORT_MD" ] && [ -f "$RESULTS" ]; then
+          python3 "$ACTION_PATH/scripts/report_generator.py" \
+            --results "$RESULTS" \
+            --rollout-dir "$target/rollouts" \
+            --output "$REPORT_MD" || true
+        fi
+        if [ ! -s "$REPORT_MD" ] && [ -f "$RESULTS" ]; then
+          shipyard report "$EVAL_PATH" \
+            --results "$RESULTS" \
+            --baseline "$BASELINE" \
+            --format markdown --out - > "$REPORT_MD" 2>/dev/null || true
         fi
 
-    - name: Post PR Comment
+        if [ -s "$REPORT_MD" ]; then
+          cat "$REPORT_MD" >> "$SUMMARY_MD"
+        else
+          echo "_No Shipyard report was produced for this run._" >> "$SUMMARY_MD"
+        fi
+
+        # 2. Delta table from the compare output (the gate's own decision).
+        #    Without a compare file, fall back to re-rendering with the CLI.
+        if [ -s shipyard-compare.json ]; then
+          python3 "$ACTION_PATH/scripts/report_generator.py" \
+            --results "$RESULTS" \
+            --compare shipyard-compare.json \
+            --output "$DELTA_MD" || true
+        elif [ -f "$BASELINE" ] && [ -f "$RESULTS" ]; then
+          shipyard report "$EVAL_PATH" \
+            --results "$RESULTS" \
+            --baseline "$BASELINE" \
+            --format markdown --out - > "$DELTA_MD" 2>/dev/null || true
+        fi
+        if [ -s "$DELTA_MD" ]; then
+          { echo; cat "$DELTA_MD"; } >> "$SUMMARY_MD"
+        fi
+
+        # 3. Job summary + step outputs.
+        if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+          cat "$SUMMARY_MD" >> "$GITHUB_STEP_SUMMARY"
+        fi
+        echo "summary_md<<EOF" >> "$GITHUB_OUTPUT"
+        cat "$SUMMARY_MD" >> "$GITHUB_OUTPUT"
+        echo "EOF" >> "$GITHUB_OUTPUT"
+
+        # 4. JUnit at the workspace root for upload and the test pane. The CLI
+        #    writes it; the generator can mirror it for older runs.
+        if [ ! -f "$target/shipyard-junit.xml" ] && [ -f "$RESULTS" ]; then
+          python3 "$ACTION_PATH/scripts/report_generator.py" \
+            --results "$RESULTS" \
+            --output - \
+            --junit-file "$target/shipyard-junit.xml" >/dev/null 2>&1 || true
+        fi
+        if [ -f "$target/shipyard-junit.xml" ]; then
+          mkdir -p "$(dirname "$JUNIT_FILE")"
+          cp "$target/shipyard-junit.xml" "$JUNIT_FILE"
+          echo "junit_file=$JUNIT_FILE" >> "$GITHUB_OUTPUT"
+          echo "junit report copied to $JUNIT_FILE"
+        else
+          echo "junit_file=" >> "$GITHUB_OUTPUT"
+          echo "no JUnit report at $target/shipyard-junit.xml"
+        fi
+
+    - name: Upload JUnit report
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: shipyard-junit-${{ github.run_id }}
+        path: ${{ inputs.junit-file }}
+        if-no-files-found: ignore
+
+    - name: Upload rollout trajectories
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: shipyard-rollouts-${{ github.run_id }}
+        path: ${{ inputs.path }}/rollouts/
+        if-no-files-found: ignore
+        retention-days: 14
+
+    - name: Post or update PR comment
       if: always() && inputs.post-comment == 'true' && github.event_name == 'pull_request'
       uses: actions/github-script@v7
       with:
         github-token: ${{ inputs.github-token }}
         script: |
           const fs = require('fs');
-          if (fs.existsSync('shipyard-report.md')) {
-            const body = fs.readFileSync('shipyard-report.md', 'utf8');
-            github.rest.issues.createComment({
-              issue_number: context.issue.number,
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              body: body
-            });
+          const MARKER = '<!-- shipyard-report -->';
+          const candidates = ['shipyard-summary.md', '${{ inputs.path }}/shipyard-report.md'];
+          let body = '';
+          for (const file of candidates) {
+            if (fs.existsSync(file)) {
+              body = fs.readFileSync(file, 'utf8');
+              break;
+            }
           }
+          if (!body.trim()) {
+            body = '_Shipyard produced no report for this run._';
+          }
+          const runUrl = '${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}';
+          body = `${MARKER}\n${body}\n\n---\n[Workflow run and artifacts](${runUrl})`;
+          // GitHub rejects comments over 65536 characters; truncate gracefully.
+          const MAX = 60000;
+          if (body.length > MAX) {
+            body = body.slice(0, MAX) + '\n\n…(comment truncated; open the workflow run for the full report)';
+          }
+
+          const params = {
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            issue_number: context.issue.number,
+          };
+          const comments = await github.paginate(github.rest.issues.listComments, {
+            ...params,
+            per_page: 100,
+          });
+          // Sticky comment: one marker comment, owned by the Actions bot, is
+          // updated in place so reruns do not spam the pull request.
+          const existing = comments.find((comment) =>
+            comment.user &&
+            comment.user.login === 'github-actions[bot]' &&
+            typeof comment.body === 'string' &&
+            comment.body.includes(MARKER)
+          );
+          if (existing) {
+            await github.rest.issues.updateComment({
+              owner: params.owner,
+              repo: params.repo,
+              comment_id: existing.id,
+              body,
+            });
+            core.info(`updated sticky Shipyard comment ${existing.id}`);
+          } else {
+            await github.rest.issues.createComment({ ...params, body });
+            core.info('created sticky Shipyard comment');
+          }
+
+    - name: Enforce the evaluation gate
+      if: always() && steps.run-eval.outputs.exit_code != ''
+      shell: bash
+      env:
+        RUN_CODE: ${{ steps.run-eval.outputs.exit_code }}
+        COMPARE_CODE: ${{ steps.compare.outputs.compare_exit_code }}
+        COMPARE_SKIPPED: ${{ steps.compare.outputs.skipped }}
+      run: |
+        set -euo pipefail
+        status=0
+        if [ "${RUN_CODE:-0}" -ne 0 ]; then
+          echo "::error::shipyard run exited ${RUN_CODE}; the evaluation verdict was not all-passed"
+          status=1
+        fi
+        if [ "${COMPARE_CODE:-0}" -eq 1 ]; then
+          echo "::error::shipyard compare blocked the delta gate (regression, flake, infra error, or suite mismatch)"
+          status=1
+        fi
+        if [ "$status" -eq 0 ]; then
+          if [ "${COMPARE_SKIPPED:-false}" = "true" ]; then
+            echo "::notice::gate passed; the delta gate was skipped because no baseline was available"
+          else
+            echo "gate passed"
+          fi
+        fi
+        exit "$status"
