@@ -13,6 +13,10 @@ spec:
         value: "evalset/"
       - name: agent-name
         value: "claude-code"
+      # Repeats per eval. k>=3 enables the 95% t-interval noise floor used by
+      # `shipyard compare`, so 3 is the recommended default.
+      - name: repeat
+        value: "3"
       - name: git-repo
         value: "https://github.com/my-org/my-agent-repo.git"
       - name: git-revision
@@ -24,6 +28,7 @@ spec:
         parameters:
           - name: eval-path
           - name: agent-name
+          - name: repeat
           - name: git-repo
           - name: git-revision
       dag:
@@ -36,6 +41,8 @@ spec:
                   value: "{{inputs.parameters.eval-path}}"
                 - name: agent-name
                   value: "{{inputs.parameters.agent-name}}"
+                - name: repeat
+                  value: "{{inputs.parameters.repeat}}"
                 - name: git-repo
                   value: "{{inputs.parameters.git-repo}}"
                 - name: git-revision
@@ -46,6 +53,7 @@ spec:
         parameters:
           - name: eval-path
           - name: agent-name
+          - name: repeat
           - name: git-repo
           - name: git-revision
         artifacts:
@@ -60,9 +68,40 @@ spec:
         args:
           - |
             cd /src
-            echo "Starting Shipyard Evaluation Runner..."
+            echo "Starting Shipyard Evaluation Runner (k={{inputs.parameters.repeat}})..."
+            # `shipyard run` exits non-zero on failed verdicts, so the pod's exit
+            # code is the gate for the suite itself. Reports are written before
+            # the failure exit, so they are stashed and archived regardless.
+            run_code=0
             shipyard run "{{inputs.parameters.eval-path}}" \
-              --agent "{{inputs.parameters.agent-name }}"
+              --agent "{{inputs.parameters.agent-name}}" \
+              --run-id "{{workflow.name}}" \
+              --repeat "{{inputs.parameters.repeat}}" \
+              --report markdown,json,junit || run_code=$?
+            mkdir -p /tmp/shipyard-reports
+            cp "{{inputs.parameters.eval-path}}/shipyard-report.md" \
+               "{{inputs.parameters.eval-path}}/shipyard-report.json" \
+               "{{inputs.parameters.eval-path}}/shipyard-junit.xml" \
+               /tmp/shipyard-reports/ 2>/dev/null || true
+            # Delta gate: when the repo commits a baseline, extend this script
+            # (or add a follow-up template) with the compare step. Argo has no
+            # PR-comment surface, so the gate is the exit code and the delta is
+            # read from the archived reports and rollouts:
+            #
+            #   compare_code=0
+            #   if [ -f "{{inputs.parameters.eval-path}}/baselines/main.json" ]; then
+            #     shipyard compare "{{inputs.parameters.eval-path}}" \
+            #       --baseline "{{inputs.parameters.eval-path}}/baselines/main.json" \
+            #       --run-id "{{workflow.name}}" --json > shipyard-compare.json || compare_code=$?
+            #   fi
+            #   # exit 0 = gate passed, 1 = blocked, 2 = usage error
+            #
+            # exit "$run_code" below still fails the pod on failed verdicts even
+            # before compare is wired in.
+            if [ "$run_code" -ne 0 ]; then
+              echo "shipyard run exited $run_code"
+            fi
+            exit "$run_code"
         resources:
           requests:
             memory: "4Gi"
@@ -94,6 +133,21 @@ spec:
               endpoint: s3.amazonaws.com
               bucket: my-shipyard-eval-bucket
               key: "atif-rollouts/{{workflow.name}}/{{pod.name}}.tar.gz"
+              accessKeySecret:
+                name: shipyard-s3-credentials
+                key: accessKey
+              secretKeySecret:
+                name: shipyard-s3-credentials
+                key: secretKey
+          - name: shipyard-reports
+            path: /tmp/shipyard-reports
+            archive:
+              tar:
+                compressionLevel: 9
+            s3:
+              endpoint: s3.amazonaws.com
+              bucket: my-shipyard-eval-bucket
+              key: "shipyard-reports/{{workflow.name}}/{{pod.name}}.tar.gz"
               accessKeySecret:
                 name: shipyard-s3-credentials
                 key: accessKey

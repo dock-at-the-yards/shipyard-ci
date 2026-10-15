@@ -8,7 +8,11 @@ stages:
 #
 # Override the channel or pin a version per project:
 #   SHIPYARD_CHANNEL: test
-#   SHIPYARD_VERSION: v0.1.0
+#   SHIPYARD_VERSION: v0.0.2
+#
+# The delta gate compares against a committed baseline when one exists:
+#   SHIPYARD_BASELINE: baselines/main.json   (relative to EVAL_PATH)
+#   SHIPYARD_REPEAT: "3"                     (k>=3 enables the noise floor)
 shipyard-agent-eval:
   stage: test
   image: alpine:3.20
@@ -18,6 +22,10 @@ shipyard-agent-eval:
     DOCKER_HOST: tcp://docker:2375
     DOCKER_TLS_CERTDIR: ""
     SHIPYARD_CHANNEL: stable
+    SHIPYARD_VERSION: ""
+    SHIPYARD_REPEAT: "1"
+    SHIPYARD_BASELINE: baselines/main.json
+    SHIPYARD_RUN_ID: "gitlab-$CI_PIPELINE_ID"
     EVAL_PATH: "evalset/"
     AGENT: "claude-code"
   before_script:
@@ -28,11 +36,42 @@ shipyard-agent-eval:
       | sh -s -- --channel "$SHIPYARD_CHANNEL" ${SHIPYARD_VERSION:+--version "$SHIPYARD_VERSION"} --yes
     - shipyard version
   script:
-    - shipyard run "$EVAL_PATH" --agent "$AGENT"
+    # `shipyard run` exits non-zero when any eval failed, and `shipyard compare`
+    # exits 1 when the delta gate blocked. Capture both so the job fails after
+    # the reports and rollouts are on disk (artifacts upload with when: always).
+    - |
+      set -u
+      run_code=0
+      shipyard run "$EVAL_PATH" \
+        --agent "$AGENT" \
+        --run-id "$SHIPYARD_RUN_ID" \
+        --repeat "$SHIPYARD_REPEAT" \
+        --report markdown,json,junit || run_code=$?
+      compare_code=0
+      if [ -f "${EVAL_PATH%/}/$SHIPYARD_BASELINE" ]; then
+        shipyard compare "$EVAL_PATH" \
+          --baseline "${EVAL_PATH%/}/$SHIPYARD_BASELINE" \
+          --run-id "$SHIPYARD_RUN_ID" || compare_code=$?
+      else
+        echo "No baseline at ${EVAL_PATH%/}/$SHIPYARD_BASELINE; skipping the delta gate."
+      fi
+      if [ "$run_code" -ne 0 ]; then
+        echo "shipyard run exited $run_code"
+        exit "$run_code"
+      fi
+      if [ "$compare_code" -ne 0 ]; then
+        echo "shipyard compare exited $compare_code (1 = blocked, 2 = usage error)"
+        exit "$compare_code"
+      fi
   artifacts:
     when: always
+    reports:
+      junit: $EVAL_PATH/shipyard-junit.xml
     # The engine writes rollouts to <eval-path>/rollouts/<run-id>/. There is no
     # .shipyard directory anywhere in the codebase.
     paths:
       - $EVAL_PATH/rollouts/
+      - $EVAL_PATH/shipyard-report.md
+      - $EVAL_PATH/shipyard-report.json
+      - $EVAL_PATH/shipyard-junit.xml
     expire_in: 14 days
