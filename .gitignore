@@ -6,4 +6,10 @@ __pycache__/
 # Local evaluation output
 rollouts/
 shipyard-report.md
+shipyard-report.json
+shipyard-junit.xml
+shipyard-summary.md
+shipyard-delta.md
+shipyard-compare.json
+shipyard-compare.err
 .env
