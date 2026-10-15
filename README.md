@@ -51,7 +51,6 @@ Every integration accepts a channel so a pipeline can track a moving target or a
 | Channel | Tracks | Use for |
 | :--- | :--- | :--- |
 | `stable` (default) | latest non-prerelease | production pipelines |
-| `test` | latest `-alpha` / `-beta` / `-rc` | validating a new CLI against your evals before it ships |
 | `dev` | latest `-dev` build | debugging the CLI itself |
 
 **Pin an exact version in production.** Track the channel while you integrate, then pin once you are satisfied:
@@ -70,7 +69,7 @@ with:
 | GitLab CI | `SHIPYARD_CHANNEL` variable | `SHIPYARD_VERSION` variable |
 | Jenkins | `CHANNEL` parameter | `VERSION` parameter |
 | Groovy library | `channel:` config | `version:` config |
-| Argo | `ghcr.io/dock-at-the-yards/shipyard-cli:<tag>` | pin the digest |
+| Argo | `install.sh --channel` at pod start | `install.sh --version` |
 
 To see exactly what a pipeline ran, `shipyard version` reports the version, the CLI commit, the engine commit it was built against, and the channel.
 
