@@ -50,6 +50,10 @@ inputs:
     description: 'Workspace-root path the JUnit XML is copied to for upload and test-pane rendering (default: shipyard-junit.xml).'
     required: false
     default: 'shipyard-junit.xml'
+  report-checks:
+    description: 'Publish the JUnit XML as a check run so test results render in the GitHub test pane (needs checks: write; degrades gracefully without it).'
+    required: false
+    default: 'true'
   post-comment:
     description: 'Automatically post the evaluation report as a PR comment; reruns update the same sticky comment'
     required: false
@@ -414,6 +418,21 @@ runs:
           echo "junit_file=" >> "$GITHUB_OUTPUT"
           echo "no JUnit report at $target/shipyard-junit.xml"
         fi
+
+    - name: Publish JUnit to the checks pane
+      id: junit-report
+      # GitHub has no native JUnit ingestion; this renders the report as a
+      # check run with a test summary. It needs `checks: write` on the caller,
+      # so a missing permission degrades gracefully instead of failing the run.
+      if: always() && inputs.report-checks == 'true' && steps.report.outputs.junit_file != ''
+      continue-on-error: true
+      uses: mikepenz/action-junit-report@v5
+      with:
+        report_paths: ${{ steps.report.outputs.junit_file }}
+        check_name: Shipyard evals
+        fail_on_failure: false
+        require_passed_tests: false
+        include_passed: true
 
     - name: Upload JUnit report
       if: always()
