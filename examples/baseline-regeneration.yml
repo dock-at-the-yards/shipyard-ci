@@ -1,0 +1,86 @@
+name: Regenerate baseline
+
+# Regenerates the committed shipyard baseline (baselines/main.json) and opens a
+# pull request with the refreshed reference results.
+#
+# The rule "only main may regenerate a baseline" is made mechanical here:
+#   * the push trigger is limited to `main`, and
+#   * the job is guarded on `github.ref == 'refs/heads/main'`, so a manual
+#     workflow_dispatch from any other branch is a no-op.
+#
+# Baselines change what every future PR is compared against, so the refresh
+# goes through review like any other change. A run whose outcome differs from
+# the previous baseline opens (or updates) a PR; an identical run produces no
+# diff and therefore no PR.
+#
+# Copy this file to .github/workflows/ in the repository that owns the evals.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  # One regeneration at a time: two baseline PRs racing each other would fight
+  # over the same branch.
+  group: baseline-regeneration
+  cancel-in-progress: false
+
+jobs:
+  regenerate-baseline:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+
+      - name: Install Shipyard CLI (pinned for a reproducible baseline)
+        env:
+          CHANNEL: stable
+          # Pin exactly: a baseline is a reference, so the tool that took it
+          # must be reproducible too.
+          VERSION: v0.0.2
+        run: |
+          set -euo pipefail
+          curl -fsSL https://raw.githubusercontent.com/dock-at-the-yards/shipyard-cli/main/install.sh \
+            | sh -s -- --channel "$CHANNEL" --version "$VERSION" --yes --install-dir /usr/local/bin
+          shipyard version
+
+      - name: Run the suite with repeats (k=3)
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          EVAL_PATH: evalset/
+        run: |
+          set -euo pipefail
+          # --report writes shipyard-report.md/json/junit at the eval root; the
+          # markdown (a delta against the *previous* committed baseline) becomes
+          # the pull request body below.
+          shipyard run "$EVAL_PATH" \
+            --run-id "baseline-${{ github.run_id }}" \
+            --repeat 3 \
+            --report markdown,json,junit
+
+      - name: Save the new baseline
+        env:
+          EVAL_PATH: evalset/
+        run: |
+          set -euo pipefail
+          shipyard baseline save "$EVAL_PATH" --name main
+          git --no-pager diff --stat -- "$EVAL_PATH/baselines/main.json"
+
+      - name: Open a pull request with the new baseline
+        uses: peter-evans/create-pull-request@v6
+        with:
+          base: main
+          branch: chore/regenerate-baseline
+          title: "chore: regenerate shipyard baseline (main, k=3)"
+          body-path: evalset/shipyard-report.md
+          commit-message: "chore: regenerate shipyard baseline (main, k=3)"
+          add-paths: |
+            evalset/baselines/main.json
+          delete-branch: true

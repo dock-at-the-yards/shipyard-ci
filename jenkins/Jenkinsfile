@@ -4,6 +4,10 @@ pipeline {
     // filesystem replace. The CLI is installed from its published release
     // artifacts instead, resolved by channel. That also means this image no
     // longer needs a Go toolchain.
+    //
+    // v0.0.2 adds repeats (`REPEAT`, k>=3 enables the noise floor), the delta
+    // gate against a committed baseline (`BASELINE`), and JUnit + Markdown
+    // reports written at the eval root.
     agent {
         docker {
             image 'alpine:3.20'
@@ -16,7 +20,10 @@ pipeline {
         string(name: 'AGENT', defaultValue: 'claude-code', description: 'Agent driver override')
         choice(name: 'MODEL', choices: ['gpt-4o', 'claude-3-5-sonnet-20241022', 'gemini-1.5-pro'], description: 'Model override')
         choice(name: 'CHANNEL', choices: ['stable', 'test', 'dev'], description: 'Shipyard release channel to install')
-        string(name: 'VERSION', defaultValue: '', description: 'Pin an exact version, e.g. v0.1.0. Empty tracks the channel.')
+        string(name: 'VERSION', defaultValue: '', description: 'Pin an exact version, e.g. v0.0.2. Empty tracks the channel.')
+        string(name: 'REPEAT', defaultValue: '1', description: 'Repeats per eval (k). k>=3 enables the 95% t-interval noise floor; 3 is recommended.')
+        string(name: 'BASELINE', defaultValue: 'baselines/main.json', description: 'Baseline JSON relative to EVAL_PATH. The delta gate runs when the file exists.')
+        string(name: 'JUNIT_FILE', defaultValue: 'shipyard-junit.xml', description: 'JUnit XML file name relative to EVAL_PATH for the junit step.')
     }
 
     environment {
@@ -42,12 +49,31 @@ pipeline {
         stage('Execute Agent Evals') {
             steps {
                 sh '''
-                    set -eu
-                    echo "Running Shipyard CI Gate..."
+                    set -u
+                    run_code=0
+                    echo "Running Shipyard CI Gate (k=${REPEAT})..."
                     shipyard run "${EVAL_PATH}" \
                         --agent "${AGENT}" \
                         --model "${MODEL}" \
-                        --run-id "jenkins-build-${BUILD_NUMBER}"
+                        --run-id "jenkins-build-${BUILD_NUMBER}" \
+                        --repeat "${REPEAT}" \
+                        --report markdown,json,junit || run_code=$?
+                    compare_code=0
+                    if [ -f "${EVAL_PATH}${BASELINE}" ]; then
+                        shipyard compare "${EVAL_PATH}" \
+                            --baseline "${EVAL_PATH}${BASELINE}" \
+                            --run-id "jenkins-build-${BUILD_NUMBER}" || compare_code=$?
+                    else
+                        echo "No baseline at ${EVAL_PATH}${BASELINE}; skipping the delta gate."
+                    fi
+                    if [ "${run_code}" -ne 0 ]; then
+                        echo "shipyard run exited ${run_code}"
+                        exit "${run_code}"
+                    fi
+                    if [ "${compare_code}" -ne 0 ]; then
+                        echo "shipyard compare exited ${compare_code} (1 = blocked, 2 = usage error)"
+                        exit "${compare_code}"
+                    fi
                 '''
             }
         }
@@ -55,11 +81,14 @@ pipeline {
 
     post {
         always {
+            // JUnit renders in the Jenkins test pane; allowEmptyResults keeps a
+            // failed run from masking the real gate failure with a second error.
+            junit testResults: "${EVAL_PATH}${JUNIT_FILE}", allowEmptyResults: true
             // The engine writes rollouts to <eval-path>/rollouts/<run-id>/.
-            archiveArtifacts artifacts: "${EVAL_PATH}rollouts/**", fingerprint: true, allowEmptyArchive: true
+            archiveArtifacts artifacts: "${EVAL_PATH}rollouts/**, ${EVAL_PATH}shipyard-report.md, ${EVAL_PATH}shipyard-report.json, ${EVAL_PATH}${JUNIT_FILE}", fingerprint: true, allowEmptyArchive: true
         }
         failure {
-            echo "Shipyard Agent regression gate failed! Check archived ATIF rollouts."
+            echo "Shipyard Agent regression gate failed! Check archived ATIF rollouts and the delta report."
         }
         success {
             echo "All agent benchmarks passed with target scores!"

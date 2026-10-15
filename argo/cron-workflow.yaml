@@ -15,6 +15,9 @@ spec:
           value: "evalset/full-regression-suite"
         - name: agent-name
           value: "claude-code"
+        # Nightly regression runs repeat: k>=3 enables the noise floor.
+        - name: repeat
+          value: "3"
         - name: git-repo
           value: "https://github.com/my-org/my-agent-repo.git"
         - name: git-revision
