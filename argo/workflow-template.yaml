@@ -63,10 +63,16 @@ spec:
               repo: "{{inputs.parameters.git-repo}}"
               revision: "{{inputs.parameters.git-revision}}"
       container:
-        image: ghcr.io/dock-at-the-yards/shipyard-cli:latest
+        # The CLI is installed at pod start from the stable channel; there is
+        # no shipped image to pull. Pin an exact CLI with
+        # `install.sh --version v0.0.2` for fully reproducible runs.
+        image: alpine:3.20
         command: [sh, -c]
         args:
           - |
+            apk add --no-cache curl ca-certificates >/dev/null 2>&1
+            curl -fsSL https://raw.githubusercontent.com/dock-at-the-yards/shipyard-cli/main/install.sh \
+              | sh -s -- --channel stable --yes
             cd /src
             echo "Starting Shipyard Evaluation Runner (k={{inputs.parameters.repeat}})..."
             # `shipyard run` exits non-zero on failed verdicts, so the pod's exit
