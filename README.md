@@ -93,6 +93,7 @@ jobs:
     permissions:
       contents: read
       pull-requests: write
+      checks: write   # renders the JUnit report in the test pane (report-checks)
 
     steps:
       - uses: actions/checkout@v4
@@ -128,6 +129,7 @@ jobs:
 | `baseline-artifact` | *(empty)* | Name of an uploaded artifact containing a baseline JSON. Used only when no committed baseline file exists — the baseline-from-artifact fallback. |
 | `policy` | *(empty)* | Path to a gate policy TOML passed to `shipyard compare --policy`. Without it, the `[gate]` table in the target manifest (or the defaults) applies. |
 | `junit-file` | `shipyard-junit.xml` | Workspace-root path the JUnit XML is copied to for upload. |
+| `report-checks` | `true` | Publish the JUnit XML as a check run (`Shipyard evals`) so results render in the GitHub test pane. Needs `checks: write` on the caller; without it the step degrades gracefully. |
 | `post-comment` | `true` | Post/upsert the evaluation report as a PR comment. |
 | `github-token` | `${{ github.token }}` | Token for posting PR comments. |
 
