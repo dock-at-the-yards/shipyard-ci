@@ -42,6 +42,7 @@ while true; do
     --unattended \
     --replace
 
-  ./run.sh
+  ./run.sh || true
   # runner exits after one job; loop registers again
+  sleep 5
 done
